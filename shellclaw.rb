@@ -1,52 +1,73 @@
 class Shellclaw < Formula
-  desc "Local-first smart shell completion copilot"
+  desc "Local-first LLM-powered shell completion copilot"
   homepage "https://github.com/Edwardd02/Shell-Claw"
-  version "0.0.1"
+  version "0.0.2"
 
   if OS.mac? && Hardware::CPU.arm?
-    url "https://github.com/Edwardd02/Shell-Claw/releases/download/v0.0.1/shellclaw-aarch64-apple-darwin.tar.gz"
-    sha256 "8f7c5f03c95297bb5898e847eed90e059c07dddebf4d36fdc07b4d6036d6e74f"
+    url "https://github.com/Edwardd02/Shell-Claw/releases/download/v0.0.2/shellclaw-aarch64-apple-darwin.tar.gz"
+    sha256 "e68d3247c2365b53c9c2cb31689bd373602ea3f24e4176a14284903b4ebcc698"
   else
-    odie "ShellClaw v0.0.1 currently supports Apple Silicon only"
+    odie "ShellClaw v0.0.2 currently supports Apple Silicon only"
   end
 
   def install
     bin.install "shellclaw"
-    (share/"shellclaw").install "scripts/download-model.sh" if File.exist?("scripts/download-model.sh")
+    # 把 hook 脚本放到 share/shellclaw/ 下,供 shell 加载
+    (share/"shellclaw").install "shellclaw.zsh"
+    (share/"shellclaw").install "shellclaw.bash"
+    # 模型自动下载脚本
+    (share/"shellclaw").install "scripts/download-model.sh"
   end
 
+  # brew install 后自动拉取模型(双源测速)。
+  # 宽松策略:下载失败仅警告、不中断 install。
   def post_install
     ohai "Downloading ShellClaw model (please wait, may take a while)..."
     script = share/"shellclaw/download-model.sh"
     begin
       if script.exist?
-        system "sh", script.to_s
+        opoo "Model download failed. Run 'brew postinstall shellclaw' to retry." unless system "sh", script.to_s
       else
         opoo "download-model.sh not found in package"
       end
     rescue StandardError
-      opoo "Model download failed. Run 'shellclaw model install' later."
+      opoo "Model download failed. Run 'brew postinstall shellclaw' to retry."
     end
+    # Upgrades must replace an already-running daemon from the previous Cellar.
+    system bin/"shellclaw", "stop"
+    opoo "Daemon setup failed. Run 'shellclaw setup #{share}/shellclaw'." unless system bin/"shellclaw", "setup", (share/"shellclaw").to_s
   end
 
   def caveats
     <<~EOS
       ShellClaw has been installed.
 
-      The daemon service is available via:
-        shellclaw start
-        shellclaw status
+      The Zsh hook was added to ~/.zshrc and the daemon was started.
+      Open a new terminal, or enable the current Zsh session now:
+        source #{opt_share}/shellclaw/shellclaw.zsh
+
+      Bash support is experimental and is not enabled automatically.
 
       Config / log:
         shellclaw log on|off
         shellclaw status
 
       Uninstall:
+        shellclaw stop
         brew uninstall shellclaw
     EOS
   end
 
+  service do
+    run [opt_bin/"shellclaw", "daemon"]
+    keep_alive true
+    process_type :background
+    working_dir var
+    log_path var/"log/shellclaw.log"
+    error_log_path var/"log/shellclaw.error.log"
+  end
+
   test do
-    system bin/"shellclaw", "status"
+    assert_match version.to_s, shell_output("#{bin}/shellclaw --version")
   end
 end
